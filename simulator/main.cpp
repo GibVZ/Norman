@@ -2,6 +2,8 @@
 #include<cstdint>  // чтобы он не ругался на uint32_t
 #include<cmath>    // математика pow и sqrt
 #include<fstream>  // Вывод файл
+#include<string>
+#include<iomanip>
 // using namespace std;
 
 // precision type is double or float
@@ -9,8 +11,8 @@ using prectype = double; // переименовываем double, чтобы е
 using u32 = uint32_t;    // используем unsigned потому что это для количемтва частиц
 
 
-const prectype sigma = 0.1; //         m
-const prectype epsilon = 1e-1; //      J
+const prectype sigma = 1; //         m
+const prectype epsilon = 1; //      J
 
 const prectype left_border  = 0; //    m
 const prectype right_border = 1; //    m
@@ -46,7 +48,7 @@ class Vector3{          // Класс, отвечающий за вектора 
 			return *this;
 		}
 */		
-		Vector3& operator=(Vector3 other) {
+		Vector3& operator=(const Vector3 & other) {
 			coords[0] = other.coords[0];
 			coords[1] = other.coords[1];
 			coords[2] = other.coords[2];	
@@ -135,13 +137,30 @@ class Particle{              // Класс частицы
 			velocity = rand_vel(); // аналагично для скорости
 		}
 		// friend Vector3 operator+(Vector3, Vector3);
+		Particle(Particle& other) {
+			mass = other.mass;
+			k_energy = other.k_energy;
+			g_energy = other.g_energy;
+			position = other.position;
+			velocity = other.velocity;
+		}
 };
 
 
 
 Vector3 Force(Particle self, Particle other){
-	prectype r = (other.position - self.position).norm2();
-	return 24 * epsilon * (std::pow(sigma, 6) / std::pow(r, 4) - 2 * std::pow(sigma, 12) / std::pow(r, 7)) * (other.position - self.position);  
+	Particle best_image = other;
+	for(int i = 0; i < 3*3*3; ++i){
+		Particle image = other;
+		for (int k = 0; k < 3; ++k){
+			image.position[k] += (int(i / std::pow(3, k)) % 3 - 1) * (right_border - left_border);
+		}
+		if ((image.position - self.position).norm2() < (best_image.position - self.position).norm2()) {
+			best_image = image;
+		}
+	}
+	prectype r = (best_image.position - self.position).norm2();
+	return 24 * epsilon * (std::pow(sigma, 6) / std::pow(r, 4) - 2 * std::pow(sigma, 12) / std::pow(r, 7)) * (best_image.position - self.position);  
 }
 /*
 Vector3 Force(Particle self, Particle other){ // Функция силы взаиможействия двух частиц, если захочется ее поменять(потенциал леннарда-джонса в идеале)
@@ -184,28 +203,28 @@ void compute_velocities(size_t particles_num, Particle* particles, prectype delt
 
 
 prectype position_reflect(prectype position){
-	/*position = -position;
-	while(std::abs(position) > 1)
-		position--;
-	while(position < 0)
-		position++;
-	return position;*/
-	if(position < left_border)
+/*	if(position < left_border)
 		return 2 * left_border - position;
 	else if(position > right_border)
 		return 2 * right_border - position;
 	else
-		return position;
+		return position;*/
+	/*
+	while(position > right_border)
+		position -= (right_border - left_border);
+	while(position < left_border)
+		position += (right_border - left_border);*/
+	return position -= int(position / (right_border - left_border)) * (right_border - left_border);
 }
 
 // обновляются координаты частиц
 void compute_positions(size_t particles_num, Particle* particles, prectype delta_t){
 	for(size_t i = 0; i < particles_num; i++){
-		Vector3 new_position = particles[i].position + particles[i].velocity * delta_t;
+		Vector3 new_position = particles[i].position + particles[i].velocity * delta_t + 0.5 * particles[i].force * (1 / particles[i].mass) * delta_t * delta_t;;
 		for(size_t k = 0; k < 3; k++){
 			if(new_position[k] != position_reflect(new_position[k])){
 				new_position[k] = position_reflect(new_position[k]); 
-				particles[i].velocity[k] = -particles[i].velocity[k];
+				// particles[i].velocity[k] = -particles[i].velocity[k];
 			}
 		}
 		particles[i].position = new_position;
@@ -232,6 +251,41 @@ Particle* grid_init(size_t particles_amount) {
 	return ret;
 }
 
+void dump_frame(std::string filename, Particle* particles, size_t particles_amount, prectype time){
+	
+	std::ofstream os(filename);
+	os << particles_amount << "\n" << " Lattice=\"1.0 0.0 0.0 0.0 1.0 0.0 0.0 0.0 1.0\" Properties=pos:R:3:velo:R:3 Time=" << 0;//time;
+	if(os.is_open()){
+		for(size_t i = 0; i < particles_amount; i++){
+			os << "\n ";
+			for(size_t j = 0; j < 3; j++)
+				os << particles[i].position[j] << " ";
+			//os << ";";
+			for(size_t j = 0; j < 3; j++)
+				os << particles[i].velocity[j] << " ";
+			//os << particles[i].k_energy << " " << particles[i].g_energy << "\n";
+		}
+	}
+	os.close();
+	
+}
+
+std::string itosfixlen(size_t step, size_t len) {
+	std::string ret = std::to_string(step);
+	while(ret.size() < len)
+		ret = "0" + ret;
+	return ret;
+}
+
+size_t digitnum(size_t n) {
+	size_t ret = 0;
+	while(n > 0) {
+		n /= 10;
+		++ret;
+	}
+	return ret;
+}
+
 int main(int argc, char* argv[]){
 	if(argc <= 4){
 		std::cout << "You must give 4 arguments(output file name, delta_t, particles amount, steps amount) but you give " << argc;
@@ -240,20 +294,13 @@ int main(int argc, char* argv[]){
 	std::srand(1);
 	size_t particles_amount = std::atoi(argv[3]);
 	size_t steps = std::atoi(argv[4]);
+	size_t step_string_len = digitnum(steps);
 	prectype delta_t = std::atof(argv[2]);
 	Particle* particles = grid_init(particles_amount);// new Particle[particles_amount];
 	
-	std::ofstream os(argv[1]);
-	if(os.is_open()){
-		for(size_t i = 0; i < particles_amount; i++){
-			for(size_t j = 0; j < 3; j++)
-				os << particles[i].position[j] << " ";
-			//os << ";";
-			for(size_t j = 0; j < 3; j++)
-				os << particles[i].velocity[j] << " ";
-			os << particles[i].k_energy << " " << particles[i].g_energy << "\n";
-		}
-		os << "\n";
+	{
+		std::string path(argv[1]);
+		dump_frame(path + "step-1.xyz", particles, particles_amount, 0);
 	}
 	
 	for(size_t step = 0; step < steps; step++){
@@ -262,17 +309,8 @@ int main(int argc, char* argv[]){
 		compute_velocities(particles_amount, particles, delta_t);
 		compute_positions(particles_amount, particles, delta_t);
 		// std::cout << step << "iteration was finished\n";
-		if(os.is_open()){
-			for(size_t i = 0; i < particles_amount; i++){
-				for(size_t j = 0; j < 3; j++)
-					os << particles[i].position[j] << " ";
-				//os << ";";
-				for(size_t j = 0; j < 3; j++)
-					os << particles[i].velocity[j] << " ";
-				os << particles[i].k_energy << " " << particles[i].g_energy << "\n";
-			}
-			os << "\n";
-		}
+		dump_frame(argv[1] + ("step" + itosfixlen(step, step_string_len)) + ".xyz", particles, particles_amount, step*delta_t);
+		std::cerr << "step " << step << "\n";
 	}
 	
 	delete[] particles;
